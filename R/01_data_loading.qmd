@@ -1,0 +1,67 @@
+---
+title: "Data loading"
+format: html
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Import data
+
+```{r}
+library(tidyverse)
+library(here)
+econo_raw <- read_csv(here("data/Economatica-8900590045-20240109022152.csv"))
+```
+
+
+### Reshaping
+
+```{r}
+econo_tidy <- econo_raw |> 
+  select(-Activo) |> 
+  pivot_longer(cols = -Fecha) |> 
+  mutate(
+    item = str_extract(name, "(.*?)(\\|)"),
+    item = str_sub(item, end = -2L),
+    accion = str_extract(name, "\\|(?:.(?!\\|))+$"),
+    accion = str_sub(accion, start = 2L)
+  ) |> 
+  filter(!str_detect(accion, "consolid:")) |> 
+  select(-name) |> 
+  mutate(value = as.numeric(if_else(value == "-", "0", value))) |> 
+  group_by(item) |> 
+  mutate(row = row_number()) |> 
+  pivot_wider(names_from = item, values_from = value) |> 
+  mutate(
+    ano = str_sub(Fecha, start = 3),
+    trimestre = str_sub(Fecha, end = 1),
+    trimestre = yq(paste(ano, trimestre))
+  ) |> 
+  relocate(trimestre, .after = Fecha) |> 
+  select(-c(Fecha, row, ano))
+
+
+econo_tidy |> glimpse()
+```
+
+### Changing columns names
+
+```{r}
+new_colnames <- c(
+  "ano", "trimestre", "accion", "activo_total", "pasivo_corriente", "p_vl",
+  "ingreso_neto", "cierre", "volumen_bolsa", "resultado_bruto", "ebitda",
+  "ciclo_operativo", "capital_trabajo", "gastos_administrativos", "costo_ventas", 
+  "pagos_proveedores", "inventario", "pasivo_total", "cuentas_xcobrar", "cuentas_xpagar",
+  "utilidad_neta"
+)
+```
+
+```{r}
+econo_tidy |> 
+  filter(accion == "AENZAC1") |> 
+  ggplot(aes(Fecha, PrPlEq)) + 
+  geom_line(aes(group = 1)) +
+  geom_point()
+```
+
+
