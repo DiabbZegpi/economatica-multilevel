@@ -10,7 +10,7 @@ editor_options:
 ```{r}
 library(tidyverse)
 library(here)
-econo_raw <- read_csv(here("data/Economatica-8900590045-20240109022152.csv"))
+econo_raw <- read_csv(here("data", "Economatica-8900590045-20240109022152.csv"))
 ```
 
 
@@ -39,16 +39,13 @@ econo_tidy <- econo_raw |>
   ) |> 
   relocate(trimestre, .after = Fecha) |> 
   select(-c(Fecha, row, ano))
-
-
-econo_tidy |> glimpse()
 ```
 
 ### Changing columns names
 
 ```{r}
 new_colnames <- c(
-  "ano", "trimestre", "accion", "activo_total", "pasivo_corriente", "p_vl",
+  "fecha", "accion", "activo_total", "pasivo_corriente", "p_vl",
   "ingreso_neto", "cierre", "volumen_bolsa", "resultado_bruto", "ebitda",
   "ciclo_operativo", "capital_trabajo", "gastos_administrativos", "costo_ventas", 
   "pagos_proveedores", "inventario", "pasivo_total", "cuentas_xcobrar", "cuentas_xpagar",
@@ -57,11 +54,64 @@ new_colnames <- c(
 ```
 
 ```{r}
-econo_tidy |> 
-  filter(accion == "AENZAC1") |> 
-  ggplot(aes(Fecha, PrPlEq)) + 
-  geom_line(aes(group = 1)) +
-  geom_point()
+econo_tidy <- 
+  econo_tidy |> 
+  rename_with(\(x) new_colnames)
 ```
 
+
+### Vásquez-Larre feature engineering
+
+```{r}
+# Oportunidades de crecimiento
+replace_nan <- function(data, replace) {
+  if_else(is.na(data) | is.nan(data) | is.infinite(data), replace, data)
+}
+
+crecimiento <- 
+  econo_tidy |> 
+  group_by(accion, year = year(fecha)) |> 
+  arrange(year) |> 
+  summarise(ventas_anuales = sum(ingreso_neto), .groups = "drop_last") |> 
+  mutate(
+    oportunidades_crec = log(ventas_anuales / dplyr::lag(ventas_anuales)),
+    oportunidades_crec = replace_nan(oportunidades_crec, 0)
+  ) |> 
+  ungroup() |> 
+  select(-ventas_anuales)
+```
+
+
+```{r}
+# Variables de Vásquez-Larre
+econo_preproc <- 
+  econo_tidy |> 
+  mutate(year = year(fecha)) |> 
+  left_join(
+    crecimiento,
+    join_by(accion, year),
+    na_matches = "never",
+    relationship = "many-to-one"
+  ) |> 
+  transmute(
+    accion,
+    fecha,
+    endeudamiento_cp = pasivo_corriente / activo_total,
+    tamano_empresa = log(activo_total),
+    # tangibilidad_act = activo_tangible / activo_total,
+    oportunidades_crec,
+    margen_bruto = resultado_bruto / ingreso_neto,
+    p_vl,
+    ebitda,
+    ciclo_operativo,
+    ct_neto = capital_trabajo / activo_total,
+    ct_neto2 = ct_neto ^ 2,
+    roa = utilidad_neta / activo_total,
+    across(where(is.numeric), \(x) replace_nan(x, 0))
+  )
+```
+
+```{r}
+saveRDS(econo_preproc, here("data", "vasquez_larre_feat_eng.rds"))
+```
 
