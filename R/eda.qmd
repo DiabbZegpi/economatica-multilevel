@@ -1,0 +1,143 @@
+---
+title: "EDA"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+library(tidyverse)
+library(here)
+library(marquee)
+
+econo_preproc <- read_rds(here("data", "vasquez_larre_feat_eng.rds"))
+# anonymize the bussinesses
+original_business_names <- unique(econo_preproc$accion)
+new_business_names <- paste("empresa", 1:3)
+names(new_business_names) <- original_business_names
+econo_preproc <- 
+  econo_preproc |> 
+  mutate(accion = fct_relabel(accion, \(x) new_business_names))
+```
+
+
+```{r theming}
+theme_set(theme_minimal(14, "Roboto"))
+theme_update(
+  panel.grid.minor = element_blank()
+)
+```
+
+```{r}
+econo_preproc |> 
+  filter(utilidad_neta < 0 | capital_trabajo < 0) |> 
+  select(accion, fecha, utilidad_neta, capital_trabajo)
+```
+
+
+
+```{r}
+var_x <- "capital_trabajo"
+var_y <- "utilidad_neta"
+
+rolling_vars <- 
+  econo_preproc |> 
+  select(fecha, var_x = {{ var_x }}, var_y = {{ var_y }}, accion) |> 
+  mutate(year = year(fecha)) |> 
+  group_by(accion) |> 
+  mutate(
+    var_x_rolling = (var_x + lag(var_x) + lag(var_x, 2) + lag(var_x, 3)) / 4,
+    var_y_rolling = (var_y + lag(var_y) + lag(var_y, 2) + lag(var_y, 3)) / 4
+  ) |>
+  ungroup() 
+
+outlier_ids <- 
+  rolling_vars |> 
+  mutate(id = row_number()) |> 
+  group_by(accion) |> 
+  mutate(
+    avg_y = mean(var_y),
+    sd_y = sd(var_y),
+    lower_bound_y = avg_y - 2.58 * sd_y,
+    upper_bound_y = avg_y + 2.58 * sd_y,
+    outlier_y = !between(var_y, lower_bound_y, upper_bound_y),
+    
+    avg_x = mean(var_x),
+    sd_x = sd(var_x),
+    lower_bound_x = avg_x - 2.58 * sd_x,
+    upper_bound_x = avg_x + 2.58 * sd_x,
+    outlier_x = !between(var_x, lower_bound_x, upper_bound_x)
+  ) |> 
+  ungroup() |> 
+  filter(outlier_x | outlier_y) |> 
+  pull(id)
+
+relacion_ct_un <- 
+  rolling_vars |> 
+  slice(-outlier_ids) |> 
+  ggplot(aes(x = var_x / 1000, y = var_y / 1000)) +
+  geom_point(
+    color = "gray60",
+    alpha = 0.5, shape = 16, size = 3
+  )  +
+  geom_point(
+    data = slice(rolling_vars, outlier_ids),
+    aes(x = var_x / 1000, y = var_y / 1000),
+    color = "firebrick", alpha = 0.5, shape = 16, size = 3
+  ) +
+  labs(
+    x = var_x,
+    y = var_y
+  ) +
+  scale_x_continuous(labels = scales::label_number()) +
+  scale_y_continuous(labels = scales::label_number()) +
+  scale_color_brewer(
+    palette = "Set2", 
+    direction = -1,
+    breaks = c("lineal", "cuadrática", "gam"),
+    labels = c(
+      "cuadrática" = expression("cuadrática:"~y == beta[0] + beta[1]*x + beta[2]*x^2),
+      "lineal" = expression("lineal:"~y == beta[0] + beta[1]*x),
+      "gam" = expression("aditiva no lineal:"~y == beta[0] + beta[1] * f(x))
+    )
+  ) +
+  geom_smooth(
+    aes(color = "lineal"), fill = "gray90", alpha = 0.5,
+    formula = y ~ x, method = "lm", linewidth = 1.5
+  ) +
+  geom_smooth(
+    aes(color = "cuadrática"), fill = "gray90", alpha = 0.5,
+    formula = y ~ I(x^2) + x, method = "lm", linewidth = 1.5
+  ) +
+  geom_smooth(
+    aes(color = "gam"), fill = "gray90", alpha = 0.5,
+    formula = y ~ s(x, bs = "cs", k = 5), method = "gam", linewidth = 1.5
+  ) + 
+  labs(
+    x = "Capital de trabajo (MS/.)", 
+    y = "Utilidad neta (MS/.)", 
+    color = "Relación",
+    title = str_wrap("Asociación entre el capital de trabajo y utilidad neta empleando modelos de regresión", width = 60),
+    subtitle = "Los {.firebrick **outliers**} en ambos ejes están destacados con {.firebrick **rojo**}"
+  ) +
+  facet_wrap(~accion, scales = "free", labeller = labeller(accion = str_to_title)) +
+  theme(
+    panel.spacing.x = unit(1, "lines"),
+    plot.title.position = "plot",
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(face = "italic", size = 14, hjust = 0.5, vjust = 1),
+    plot.subtitle = element_marquee(hjust = 0.5, margin = margin(b = 0))
+  )
+```
+
+```{r}
+ggsave(
+  filename = here("plots", "relación CT y UN.png"), 
+  plot = relacion_ct_un, 
+  device = ragg::agg_png,
+  dpi = 320,
+  width = 12.8,
+  height = 6.2
+)
+```
+
